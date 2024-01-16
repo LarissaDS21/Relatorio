@@ -1,0 +1,65 @@
+Fastqs = open('archive.txt').read().strip().split('\n') #Arquivo de entrada com o nome de cada amostra separada por quebra de linha (cada linha tem uma amostra)
+
+rule all:
+    input:
+        expand("path/{samples}/{samples}_Aligned.sortedByCoord.out.bam.bai", samples=Fastqs)
+
+## Uniao dos FASTQs das 4 lanes
+
+rule cat:
+    input:
+        Fastqs_R1=lambda wc:expand("input_directory_fastq/{samples}_{lane}_R1.fastq.gz", samples=wc.samples, lane=['L001','L002','L003','L004']),
+        Fastqs_R2=lambda wc:expand("input_directory_fastq/{samples}_{lane}_R2.fastq.gz", samples=wc.samples, lane=['L001','L002','L003','L004'])
+    output:
+        Fastq_R1="output_directory_fastq/{samples}_R1.fastq.gz",
+        Fastq_R2="output_directory_fastq/{samples}_R2.fastq.gz"
+    log:
+        "log/Fastqs/{samples}.log"
+    threads: 12
+    resources:
+        mem_gb=80
+    params:
+        jobname = "cat_{samples}"
+    shell:
+        'zcat {input.Fastqs_R1} | gzip -c > {output.Fastq_R1} & '
+        'zcat {input.Fastqs_R2} | gzip -c > {output.Fastq_R2}'
+
+## Alinhamento de RNA 
+
+rule STAR_align:
+    input:
+        Fastq_R1="output_directory_fastq/{samples}_R1.fastq.gz",
+        Fastq_R2="output_directory_fastq/{samples}_R2.fastq.gz"
+    output:
+        bam="output_directory_bam/{samples}/{samples}_Aligned.sortedByCoord.out.bam"
+    log:
+        "log/StarAlign/tmp_output/{samples}.log"
+    threads: 12
+    resources:
+        mem_gb=80
+    params:
+        Genome_index = "path/STAR/Genome-index-GRCh38/GenomeDir/",
+        out_dir = "path/{samples}/{samples}_",
+        jobname = "Star_Align_{samples}",
+        GTF = "path/Homo_sapiens.GRCh38.104.gtf"
+    shell:
+        'STAR --runThreadN 12 --genomeDir {params.Genome_index} --readFilesIn {input.Fastq_R1} {input.Fastq_R2} ' 
+        '--readFilesCommand zcat --outFileNamePrefix {params.out_dir} --outSAMtype BAM SortedByCoordinate --outSAMstrandField intronMotif '
+        '--outFilterMismatchNmax 3 --alignIntronMax 299999 --alignSJDBoverhangMin 6 --alignEndsType EndToEnd --chimSegmentMin 2 --sjdbGTFfile {params.GTF}'
+
+## Geracao do arquivo índice do bam 
+
+rule samtools:
+    input:
+        bam="path/{samples}/{samples}_Aligned.sortedByCoord.out.bam"
+    output:
+        bam_bai="path/{samples}/{samples}_Aligned.sortedByCoord.out.bam.bai"
+    log:
+        "log/samtools/{samples}.log"
+    threads: 8
+    resources:
+        mem_gb=10
+    params:
+        jobname = "samtools_{samples}"
+    shell:
+        '/conda/bin/samtools index -b {input} {output}'
